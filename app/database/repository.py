@@ -68,3 +68,49 @@ def get_ticket_by_id(ticket_id: str):
 
     finally:
         connection.close()
+def get_orders_by_account(account_id: str):
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM orders
+            WHERE account_id = ?
+            ORDER BY booked_at DESC
+            """,
+            (account_id,)
+        )
+
+        orders = cursor.fetchall()
+
+        return [dict(order) for order in orders]
+
+    finally:
+        connection.close()
+
+
+def get_tickets_by_account(account_id: str):
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM tickets
+            WHERE account_id = ?
+            ORDER BY created_at DESC
+            """,
+            (account_id,)
+        )
+
+        tickets = cursor.fetchall()
+
+        return [dict(ticket) for ticket in tickets]
+
+    finally:
+        connection.close()
