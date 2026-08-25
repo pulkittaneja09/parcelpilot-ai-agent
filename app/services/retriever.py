@@ -16,6 +16,8 @@ def retrieve_documents(
 
     retrieved_documents = []
 
+    seen_ids = set()
+
     for index in range(len(results["documents"][0])):
         document = results["documents"][0][index]
         metadata = results["metadatas"][0][index]
@@ -30,6 +32,13 @@ def retrieve_documents(
             if document_account_id not in [account_id, "GLOBAL"]:
                 continue
 
+        key = (
+            metadata["filename"],
+            metadata["chunk_index"],
+        )
+
+        seen_ids.add(key)
+
         retrieved_documents.append(
             {
                 "document": document,
@@ -37,6 +46,38 @@ def retrieve_documents(
                 "distance": distance,
             }
         )
+
+    if account_id:
+        agreement_results = collection.get(
+            where={
+                "$and": [
+                    {"account_id": {"$eq": account_id}},
+                    {"document_type": {"$eq": "customer_agreement"}},
+                    {"status": {"$eq": "current"}},
+                ]
+            },
+            include=["documents", "metadatas"],
+        )
+
+        for index in range(len(agreement_results["documents"])):
+            document = agreement_results["documents"][index]
+            metadata = agreement_results["metadatas"][index]
+
+            key = (
+                metadata["filename"],
+                metadata["chunk_index"],
+            )
+
+            if key in seen_ids:
+                continue
+
+            retrieved_documents.append(
+                {
+                    "document": document,
+                    "metadata": metadata,
+                    "distance": 0,
+                }
+            )
 
     retrieved_documents.sort(
         key=lambda item: (
