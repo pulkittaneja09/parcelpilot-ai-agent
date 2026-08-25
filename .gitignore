@@ -1,0 +1,20 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Local storage (generated at runtime)
+storage/chroma/
+storage/sqlite/*.db
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
