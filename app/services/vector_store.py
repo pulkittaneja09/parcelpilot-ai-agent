@@ -17,3 +17,18 @@ def get_collection():
     )
 
     return collection
+
+
+def clear_collection():
+    client = chromadb.PersistentClient(
+        path=str(CHROMA_PATH)
+    )
+
+    try:
+        client.delete_collection("parcelpilot_documents")
+    except Exception:
+        pass
+
+    return client.get_or_create_collection(
+        name="parcelpilot_documents"
+    )
