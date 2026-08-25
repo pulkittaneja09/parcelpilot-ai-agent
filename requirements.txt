@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+langgraph
+langchain
+chromadb
+google-genai
+pandas
+openpyxl
+pypdf
+python-dotenv
+sqlalchemy
