@@ -22,9 +22,19 @@ class AnswerResponse(BaseModel):
     answer: str
 
 
+@app.get("/")
+def root():
+    """Return basic information about the API."""
+
+    return {
+        "message": "ParcelPilot AI Support Copilot is running"
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Report that the backend service is running."""
+
     return {
         "status": "ok",
         "service": "ParcelPilot AI Support Copilot",
