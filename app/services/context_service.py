@@ -36,8 +36,8 @@ def get_order_context(order_id: str):
 
 def build_agent_context(
     query: str,
-    ticket_id: str = None,
-    order_id: str = None,
+    ticket_id: str | None = None,
+    order_id: str | None = None,
 ):
     context = {
         "query": query,
