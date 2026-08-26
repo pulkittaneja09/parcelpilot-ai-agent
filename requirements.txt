@@ -3,9 +3,13 @@ uvicorn
 langgraph
 langchain
 chromadb
-google-genai
+openai
 pandas
 openpyxl
 pypdf
 python-dotenv
 sqlalchemy
+
+# Required by fastapi.testclient, used in scripts/test_chat_http_stub.py
+httpx
+

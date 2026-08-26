@@ -10,6 +10,9 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 
+# Node (the frontend has its own .gitignore; this is a safety net for the root)
+node_modules/
+
 # Local storage (generated at runtime)
 storage/chroma/
 storage/sqlite/*.db
