@@ -1,73 +1,360 @@
 # ParcelPilot AI Support Copilot
 
-An AI-powered support and operations backend for a B2B logistics platform. It handles natural-language support queries, multi-step agent workflows, document retrieval, structured data lookup, and proactive issue detection — all with customer-level access control.
+A context-aware, **multi-turn conversational RAG support agent** for a B2B logistics
+platform. Support agents ask a question about a live ticket or order and keep
+asking follow-ups — "why is it that severity?", "what should I tell the
+customer?" — and the copilot answers from operational data and company documents,
+resolving references against the conversation so far.
 
-## Backend Stack
+Answers are grounded in three sources and resolved by an explicit precedence
+rule, so a customer's signed agreement always beats the standard policy.
 
-| Layer | Technology |
+---
+
+## Architecture
+
+```
+┌──────────────┐   POST /api/chat    ┌────────────────────────────────────┐
+│  React SPA   │ ──────────────────► │            FastAPI                 │
+│  (Vite/TS)   │ ◄────────────────── │  main.py — routing, CORS, errors   │
+└──────────────┘   {session_id, …}   └───────────────┬────────────────────┘
+                                                     │
+                              ┌──────────────────────┴──────────────────────┐
+                              │            chat_service.py                  │
+                              │  sessions · entity scoping · history window │
+                              └──────────────────────┬──────────────────────┘
+                                                     │
+                              ┌──────────────────────┴──────────────────────┐
+                              │           support_agent.py                  │
+                              │  one RAG pipeline for every surface         │
+                              └───┬─────────────┬───────────────┬───────────┘
+                                  │             │               │
+                     ┌────────────▼──┐  ┌───────▼────────┐  ┌───▼──────────┐
+                     │ SQLite        │  │ ChromaDB       │  │ Anthropic    │
+                     │ tickets,      │  │ policy / SOP / │  │ Claude       │
+                     │ orders,       │  │ agreement      │  │ 3.5 Sonnet   │
+                     │ accounts      │  │ chunks         │  │              │
+                     └───────────────┘  └────────────────┘  └──────────────┘
+```
+
+```
+app/
+├── agent/
+│   └── support_agent.py     — RAG pipeline + prompt construction + Anthropic Claude calls
+├── config/
+│   └── document_metadata.py — per-document status, type, account, precedence
+├── database/
+│   ├── connection.py        — SQLite connection factory
+│   └── repository.py        — ticket / order / account queries
+├── models/
+│   └── chat.py              — Pydantic request/response schemas for /api/chat
+├── services/
+│   ├── chat_service.py      — conversation orchestration
+│   ├── session_store.py     — session persistence boundary (in-memory impl)
+│   ├── context_service.py   — ticket/order + account context assembly
+│   ├── retriever.py         — Chroma query + precedence sorting
+│   └── vector_store.py      — Chroma client / collection
+├── errors.py                — domain errors mapped to HTTP status codes
+└── main.py                  — FastAPI app, endpoints, CORS, error handlers
+
+frontend/
+├── scripts/test-markdown.ts — parser unit tests (npm run test:markdown)
+└── src/
+    ├── components/
+    │   ├── ChatPanel.tsx    — transcript, loading, error states
+    │   ├── ChatComposer.tsx — message input
+    │   ├── ConversationBar.tsx — record ID, session, New Conversation
+    │   ├── Markdown.tsx     — React renderer (no dangerouslySetInnerHTML)
+    │   └── markdown/        — pure parsers: blocks.ts, inline.ts
+    └── services/api.ts      — the only module that talks to the backend
+
+scripts/                     — ingestion and test harnesses
+storage/
+├── sqlite/parcelpilot.db    — operational data
+└── chroma/                  — vector store
+```
+
+### SQLite operational data
+
+`storage/sqlite/parcelpilot.db` holds the records a support agent works from:
+
+| Table | Key columns |
 |---|---|
-| API | FastAPI |
-| AI Agent | LangGraph + Gemini API |
-| Vector Store | ChromaDB |
-| Relational Store | SQLite + SQLAlchemy |
-| Data Processing | Pandas |
-| Config | Pydantic + python-dotenv |
+| `tickets` | `ticket_id`, `account_id`, `status`, `subject`, `description`, `historical_resolution` |
+| `orders` | `order_id`, `account_id`, `status`, `booked_at`, `pickup_window_*`, `carrier_fault`, `cancellation_requested_at` |
+| `accounts` | `account_id`, `account_name`, `plan`, `premium_support`, `contract_file` |
+
+Every turn loads the record **and** its account, so the model knows the customer
+is on a premium plan with a signed agreement before it reasons about SLAs.
+
+### ChromaDB / vector retrieval & local embeddings
+
+Policy PDFs, SOPs, product docs, and customer agreements are chunked into
+`storage/chroma`. Each chunk carries `filename`, `document_type`, `status`,
+`account_id`, and `precedence` (see `app/config/document_metadata.py`).
+
+> **Note on Embeddings**: Document embeddings remain strictly local (using `all-MiniLM-L6-v2` via ChromaDB). Embeddings are **not** generated by Anthropic. Claude is used exclusively for final answer generation via the Messages API.
+
+`retriever.py` then:
+
+1. runs a semantic query for the **current** message,
+2. drops anything whose `status` is not `current` — deprecated policies never
+   reach the model,
+3. drops documents belonging to another account (only the account's own
+   documents plus `GLOBAL` ones survive),
+4. force-includes the account's signed agreement even if the semantic query
+   missed it, and
+5. sorts by precedence, then by distance.
+
+### Source precedence
+
+| Rank | Source |
+|---|---|
+| 1 | Customer-specific signed agreement |
+| 2 | Current company policy or SOP |
+| 3 | Current product documentation |
+| 4 | Historical information or notes |
+
+Deprecated documents are never used. When sources conflict, the higher-precedence
+one wins and the answer says which one it followed. Conversation history is
+context only — it never overrides operational data or a higher-precedence
+document.
+
+### Multi-turn session memory
+
+A session is created on the first message and returned as `session_id`. It stores:
+
+- `session_id`, `entity_type`, `entity_id`
+- the transcript as `{role, content}` messages
+- `created_at` / `updated_at`
+
+Properties that matter:
+
+- **Scoped.** A session is bound to one record. Reusing a `TKT-501` session for
+  `TKT-502` or `ORD-1001` is rejected with **409**, so history cannot leak
+  between records.
+- **Bounded.** The prompt replays at most `MAX_HISTORY_MESSAGES` (20) turns; a
+  session stores at most 200, and the store evicts the least-recently-used
+  session past 500.
+- **Retrieval every turn.** Documents are retrieved for each new message, so
+  "what does the agreement say about this?" pulls fresh chunks rather than
+  reusing the first turn's context.
+- **Written only on success.** An unknown id or a failed generation leaves no
+  empty session behind.
+- **Swappable.** `chat_service` depends on the `SessionStore` interface;
+  implement its four methods and call `set_session_store()` to move to Redis or
+  a database.
+
+---
 
 ## Setup
 
 ```bash
 # 1. Create and activate a virtual environment
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
 # 3. Configure environment
-cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
+#    Create .env at the project root (see Environment variables below)
 
-# 4. Start the development server
+# 4. Build the data stores (only needed once)
+python -m scripts.ingest_excel        # SQLite: accounts, orders, tickets
+python -m scripts.ingest_documents    # ChromaDB: policy/SOP/agreement chunks
+```
+
+### Run the backend
+
+```bash
 uvicorn app.main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`.
+API at `http://127.0.0.1:8000`, interactive docs at `http://127.0.0.1:8000/docs`.
 
-## Architecture
+### Run the frontend
 
-_To be documented as components are built._
-
-```
-app/
-├── agent/      — LangGraph agent and workflow definitions
-├── tools/      — Agent tools (document retrieval, DB lookup, actions)
-├── services/   — Business logic and orchestration
-├── database/   — SQLAlchemy models and DB session management
-├── models/     — Pydantic request/response schemas
-└── config/     — Settings and environment configuration
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-## Features
+UI at `http://localhost:5173`. The Vite dev server proxies `/api` and `/health`
+to the backend, so requests are same-origin and need no CORS preflight.
 
-- [ ] Natural-language support query handling
-- [ ] Multi-step agent workflows (LangGraph)
-- [ ] Document retrieval from policies, SOPs, and agreements (ChromaDB)
-- [ ] Structured data lookup — accounts, orders, support tickets (SQLite)
-- [ ] Source reliability and conflict resolution
-- [ ] Customer/account-level access control at the tool layer
-- [ ] State-changing actions (e.g., escalation creation) with user confirmation
-- [ ] Proactive issue detection for recurring issues and SLA risks
+```bash
+npm run build            # typecheck + production build
+npm run test:markdown    # markdown parser unit tests
+```
 
-## API Documentation
+---
 
-Interactive docs are available at `http://localhost:8000/docs` once the server is running.
+## Environment variables
+
+### Backend — `.env` at the project root (never committed)
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | — | Anthropic API key |
+| `CLAUDE_MODEL` | no | `claude-3-5-sonnet-20241022` | Model used for every answer |
+| `CORS_ALLOW_ORIGINS` | no | localhost/127.0.0.1 on ports 5173 and 4173 | Comma-separated allowlist of browser origins |
+
+### Frontend — `frontend/.env`
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://127.0.0.1:8000` | Backend location (also the Vite proxy target) |
+| `VITE_API_DIRECT` | `false` | `true` bypasses the proxy and calls the backend directly, which requires the origin to be in `CORS_ALLOW_ORIGINS` |
+
+`.env` files are gitignored. Keys are read from the environment only — nothing is
+hardcoded.
+
+---
+
+## API endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Service health check |
+| GET | `/` | Basic service information |
+| POST | `/api/chat` | **Multi-turn conversation** about a ticket or order |
+| POST | `/api/tickets/{ticket_id}/answer` | Single-turn ticket question |
+| POST | `/api/orders/{order_id}/answer` | Single-turn order question |
 
-_Additional endpoints will be documented here as they are added._
+Both single-turn endpoints are unchanged and remain fully supported.
 
-## Frontend
+### `POST /api/chat`
 
-A React + TypeScript frontend will be added in a later phase. The backend API is designed to be consumed by that frontend as well as other integrations.
+Request:
+
+```json
+{
+  "session_id": "optional-session-id",
+  "entity_type": "ticket",
+  "entity_id": "TKT-501",
+  "message": "What is the severity?"
+}
+```
+
+Response:
+
+```json
+{
+  "session_id": "ad675aa83dbb47bb9ef774a6328c7b9c",
+  "entity_type": "ticket",
+  "entity_id": "TKT-501",
+  "answer": "This is a **P1 - Critical** incident…"
+}
+```
+
+Omit `session_id` to start a conversation, then send the returned id with every
+follow-up.
+
+### Status codes
+
+| Code | Meaning |
+|---|---|
+| 200 | Answer produced |
+| 404 | Ticket or order id does not exist — e.g. `{"detail": "Ticket TKT-999 not found"}` |
+| 409 | The `session_id` belongs to a different record |
+| 422 | Malformed body (blank message, unknown `entity_type`, …) |
+| 429 | Anthropic rate limit reached; includes a `Retry-After` header |
+| 500 | Genuine server error — logged with a traceback |
+
+Only these specific conditions are translated. Unexpected failures stay 500
+rather than being reshaped into client errors.
+
+---
+
+## Example conversation
+
+```bash
+# Turn 1 — start a conversation
+curl -X POST http://127.0.0.1:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"entity_type":"ticket","entity_id":"TKT-501",
+       "message":"All shipment creation is failing. What is the severity?"}'
+```
+
+> This is a **P1 - Critical** incident. `01_Support_Policy_v3_CURRENT.pdf` defines
+> P1 as a complete production outage preventing all shipment creation for a
+> customer, which matches this ticket. Northstar Logistics has premium support,
+> so the first-response target is 15 minutes, 24x7.
+
+```bash
+# Turn 2 — follow-up, same session
+curl -X POST http://127.0.0.1:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"<id from turn 1>","entity_type":"ticket","entity_id":"TKT-501",
+       "message":"Why is it that severity?"}'
+```
+
+> It is P1 - Critical because every user at Northstar receives HTTP 500 when
+> creating any shipment, which is a complete production outage under
+> `01_Support_Policy_v3_CURRENT.pdf` …
+
+```bash
+# Turn 3 — the copilot still has the thread
+curl -X POST http://127.0.0.1:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"<same id>","entity_type":"ticket","entity_id":"TKT-501",
+       "message":"What should I tell the customer?"}'
+```
+
+> Tell the customer the issue is being handled as a P1 incident, that engineering
+> is engaged, and that they will receive an update within the 15-minute
+> first-response window …
+
+Note that turns 2 and 3 contain no ticket id and no mention of severity — the
+copilot resolves "that severity" and "the customer" from the conversation.
+
+---
+
+## Testing
+
+```bash
+# Session & HTTP stub tests — deterministic, no API key or quota needed
+python -m scripts.test_chat_http_stub
+python -m scripts.test_chat_session
+
+# Full API suite against a running server (makes real Anthropic calls)
+python -m scripts.test_chat_api
+
+# Only the checks that consume no model rate limit
+python -m scripts.test_chat_api --no-model
+
+# Markdown parser
+cd frontend && npm run test:markdown
+```
+
+`scripts/` also holds the original harnesses for retrieval, the repository layer,
+and the context service.
+
+---
+
+## Notes and limitations
+
+**In-memory sessions.** Conversations live in the FastAPI process:
+
+- they are lost on restart,
+- they are not shared between workers, so `--workers 2` would route follow-ups to
+  a process that has never seen the conversation,
+- they are capped at 500 sessions with least-recently-used eviction,
+- there is no TTL, so a session survives until evicted, and
+- there is no per-session lock, so two simultaneous turns on the same brand-new
+  session can race (the second one wins).
+
+`SessionStore` exists precisely so this can be replaced by Redis or a database
+table without touching the chat logic.
+
+**Anthropic rate limits.** When rate limits are reached, `/api/chat` returns 429
+with a `Retry-After` header rather than a 500, and the UI explains it. Set
+`CLAUDE_MODEL` to a model with more headroom if needed.
+
+**Markdown rendering.** `Markdown.tsx` renders React elements only — no
+`dangerouslySetInnerHTML`. Emphasis follows CommonMark's flanking rules, so
+underscores inside filenames, IDs, and `snake_case` words are preserved
+(`01_Support_Policy_v3_CURRENT.pdf` renders verbatim) while `_italic_` still
+works. See `frontend/scripts/test-markdown.ts`.
