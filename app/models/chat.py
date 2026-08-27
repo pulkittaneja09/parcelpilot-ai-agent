@@ -67,6 +67,24 @@ class ChatRequest(BaseModel):
         return value
 
 
+class ToolUse(BaseModel):
+    """One tool the agent actually invoked while answering a turn.
+
+    Populated from the real call sites — not narrated by the model — so the UI
+    shows what ran rather than what the model claims ran.
+    """
+
+    #: Stable identifier: ``structured_data_lookup``, ``document_search``, or
+    #: ``escalation_action``.
+    name: str
+    #: Short human-readable label, e.g. "Structured Data Lookup".
+    label: str
+    #: Emoji shown beside the label in the UI.
+    icon: str
+    #: What the call did on this turn, e.g. "Looked up ticket TKT-502".
+    detail: str
+
+
 class ChatResponse(BaseModel):
     """Reply from ``POST /api/chat``.
 
@@ -78,3 +96,10 @@ class ChatResponse(BaseModel):
     entity_type: EntityType
     entity_id: str
     answer: str
+    #: Tools invoked for this turn, in call order.
+    tools_used: list[ToolUse] = Field(default_factory=list)
+    #: Set when a state-changing action is prepared and awaiting confirmation.
+    pending_action: dict | None = None
+    #: Set on the turn where a state-changing action actually executed.
+    action_result: dict | None = None
+
