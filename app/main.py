@@ -59,7 +59,7 @@ def _init_db() -> None:
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tickets'")
         if not cur.fetchone():
-            ingest_excel.ingest_data(conn)
+            ingest_excel.ingest_data()
     finally:
         conn.close()
 
