@@ -24,6 +24,35 @@ class EntityNotFoundError(ParcelPilotError, ValueError):
         super().__init__(f"{entity_type.capitalize()} {entity_id} not found")
 
 
+class UnknownUserError(ParcelPilotError):
+    """The ``X-User-ID`` header names a user that does not exist.
+
+    Distinct from an authorisation failure: the caller could not be identified at
+    all, so the API layer maps it to 401 rather than 403.
+    """
+
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
+        super().__init__(
+            f"Unknown user {user_id!r}. Send a valid X-User-ID header."
+        )
+
+
+class AccountAccessDeniedError(ParcelPilotError):
+    """The caller's role and account scope do not cover this record.
+
+    Raised by :mod:`app.services.access_control` *before* protected context is
+    loaded, before vector retrieval, and before model generation — so an
+    unauthorised request reads no row, never reaches ChromaDB, never spends a
+    token, and never sees another customer's data. The API layer maps it to 403.
+    """
+
+    def __init__(self, entity_type: str, entity_id: str, reason: str) -> None:
+        self.entity_type = entity_type
+        self.entity_id = entity_id
+        super().__init__(reason)
+
+
 class SessionEntityMismatchError(ParcelPilotError, ValueError):
     """An existing session was reused with a different ticket or order.
 
