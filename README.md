@@ -1,179 +1,249 @@
-# ParcelPilot AI Support Copilot
+﻿# ParcelPilot AI Support Copilot
 
-A context-aware, **multi-turn conversational RAG support agent** for a B2B logistics
-platform. Support agents ask a question about a live ticket or order and keep
-asking follow-ups — "why is it that severity?", "what should I tell the
-customer?" — and the copilot answers from operational data and company documents,
-resolving references against the conversation so far.
+> A production-style AI support operations system — multi-turn conversations, RAG-grounded answers, and backend-enforced access control, deployed on Vercel and Render.
 
-Answers are grounded in three sources and resolved by an explicit precedence
-rule, so a customer's signed agreement always beats the standard policy.
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-RAG-orange)](https://www.trychroma.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+---
+
+## Overview
+
+**ParcelPilot AI Support Copilot** is an AI-powered support operations tool built to help customer support agents resolve tickets and orders faster. Instead of searching through policy documents or escalation procedures manually, agents ask natural language questions and receive context-aware, grounded answers based on the operational record, company documents, and conversation history.
+
+This is not a generic chatbot. It is a purpose-built support operations copilot with:
+
+- **Multi-turn conversational memory** — follow-ups like "why?" or "what should I tell the customer?" maintain context.
+- **Retrieval-Augmented Generation** — answers are grounded in ChromaDB-retrieved knowledge before the LLM is invoked.
+- **Backend-enforced authorization** — role-based access control prevents account data from leaking across agent scopes, even if the client supplies an arbitrary record ID.
+- **Escalation workflow** — agents can escalate tickets through the conversation interface, with the action confirmed explicitly before execution.
+
+---
+
+## Application Preview
+
+### Support Operations Dashboard
+
+<img src="docs/images/support-dashboard.png" alt="ParcelPilot AI Support Operations Copilot — main dashboard showing Ticket Analysis mode, demo user selector, session state, and example queries" width="900"/>
+
+The main workspace. Agents select a **Ticket ID** or **Order ID**, choose an authenticated demo user, and start a conversation. The right panel surfaces one-click example queries seeded from real records in the database — no setup needed to see it working.
+
+The sidebar shows the active inference stack:
+- **Claude 3.5 Sonnet** — reasoning engine
+- **ChromaDB** — vector retrieval
+- **SQLite** — operational data
+
+The backend connection status (latency, URL) is shown live at the bottom left.
+
+---
+
+### Backend-Enforced Authorization Failure (HTTP 403)
+
+<img src="docs/images/access-denied.png" alt="ParcelPilot access denied — HTTP 403 returned for Support Agent 1 attempting to access TKT-502, which belongs to an account outside their permitted scope" width="900"/>
+
+**Support Agent 1** (scope: `ACCT-001`, `ACCT-003`) attempts to query **TKT-502**, a ticket belonging to an account outside their permitted scope.
+
+The backend returns **HTTP 403** before loading any record context, before vector retrieval, and before the LLM is called. The error message names the caller's own role and scope — not the record's owner — so no account information is disclosed in the denial.
+
+This means modifying a ticket ID in the browser cannot widen access. Authorization is a server-side property of the record's owning account, not of the client request.
+
+---
+
+### Escalation Confirmed
+
+<img src="docs/images/escalation-created.png" alt="ParcelPilot escalation created — ESC-C4EE2DB9 confirmed for TKT-501 under ACCT-001 with created status and ISO 8601 timestamp" width="900"/>
+
+A confirmed escalation for **TKT-501**. The UI displays the complete escalation record inline:
+
+| Field | Value |
+|---|---|
+| Escalation ID | `ESC-C4EE2DB9` |
+| Ticket | `TKT-501` |
+| Account | `ACCT-001` |
+| Status | `created` |
+| Created at | `2026-08-27T06:43:47.069100+00:00` |
+
+Escalations follow a two-step flow: the AI prepares and justifies the action on the first turn, and execution only happens after explicit confirmation. The UI confirms that no further action is required.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────┐   POST /api/chat    ┌────────────────────────────────────┐
-│  React SPA   │ ──────────────────► │            FastAPI                 │
-│  (Vite/TS)   │ ◄────────────────── │  main.py — routing, CORS, errors   │
-└──────────────┘   {session_id, …}   └───────────────┬────────────────────┘
-                                                     │
-                              ┌──────────────────────┴──────────────────────┐
-                              │            chat_service.py                  │
-                              │  sessions · entity scoping · history window │
-                              └──────────────────────┬──────────────────────┘
-                                                     │
-                              ┌──────────────────────┴──────────────────────┐
-                              │           support_agent.py                  │
-                              │  one RAG pipeline for every surface         │
-                              └───┬─────────────┬───────────────┬───────────┘
-                                  │             │               │
-                     ┌────────────▼──┐  ┌───────▼────────┐  ┌───▼──────────┐
-                     │ SQLite        │  │ ChromaDB       │  │ Anthropic    │
-                     │ tickets,      │  │ policy / SOP / │  │ Claude       │
-                     │ orders,       │  │ agreement      │  │ 3.5 Sonnet   │
-                     │ accounts      │  │ chunks         │  │              │
-                     └───────────────┘  └────────────────┘  └──────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                     React / Vite Frontend               │
+│          TypeScript  ·  Vite proxy  ·  Vercel           │
+└─────────────────────┬───────────────────────────────────┘
+                      │ HTTP  (X-User-ID header)
+┌─────────────────────▼───────────────────────────────────┐
+│                    FastAPI Backend                       │
+│                                                         │
+│  ┌───────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │ Access Control│  │ Chat Service │  │ Agent (RAG) │  │
+│  │ authenticate()│  │ send_message │  │  _generate  │  │
+│  │ authorise()   │  │ session store│  │  _answer    │  │
+│  └───────┬───────┘  └──────┬───────┘  └──────┬──────┘  │
+│          │                 │                  │         │
+│  ┌───────▼─────────────────▼──────────────────▼──────┐  │
+│  │  SQLite (tickets, orders, accounts)               │  │
+│  │  ChromaDB (policy docs, SOPs, agreements)         │  │
+│  │  Agent Router → Claude 3.5 Sonnet                 │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-```
-app/
-├── agent/
-│   └── support_agent.py     — RAG pipeline + prompt construction + Anthropic Claude calls
-├── config/
-│   └── document_metadata.py — per-document status, type, account, precedence
-├── database/
-│   ├── connection.py        — SQLite connection factory
-│   └── repository.py        — ticket / order / account queries
-├── models/
-│   └── chat.py              — Pydantic request/response schemas for /api/chat
-├── services/
-│   ├── chat_service.py      — conversation orchestration
-│   ├── session_store.py     — session persistence boundary (in-memory impl)
-│   ├── context_service.py   — ticket/order + account context assembly
-│   ├── retriever.py         — Chroma query + precedence sorting
-│   └── vector_store.py      — Chroma client / collection
-├── errors.py                — domain errors mapped to HTTP status codes
-└── main.py                  — FastAPI app, endpoints, CORS, error handlers
+### Stack
 
-frontend/
-├── scripts/test-markdown.ts — parser unit tests (npm run test:markdown)
-└── src/
-    ├── components/
-    │   ├── ChatPanel.tsx    — transcript, loading, error states
-    │   ├── ChatComposer.tsx — message input
-    │   ├── ConversationBar.tsx — record ID, session, New Conversation
-    │   ├── Markdown.tsx     — React renderer (no dangerouslySetInnerHTML)
-    │   └── markdown/        — pure parsers: blocks.ts, inline.ts
-    └── services/api.ts      — the only module that talks to the backend
-
-scripts/                     — ingestion and test harnesses
-storage/
-├── sqlite/parcelpilot.db    — operational data
-└── chroma/                  — vector store
-```
-
-### SQLite operational data
-
-`storage/sqlite/parcelpilot.db` holds the records a support agent works from:
-
-| Table | Key columns |
+| Layer | Technology |
 |---|---|
-| `tickets` | `ticket_id`, `account_id`, `status`, `subject`, `description`, `historical_resolution` |
-| `orders` | `order_id`, `account_id`, `status`, `booked_at`, `pickup_window_*`, `carrier_fault`, `cancellation_requested_at` |
-| `accounts` | `account_id`, `account_name`, `plan`, `premium_support`, `contract_file` |
-
-Every turn loads the record **and** its account, so the model knows the customer
-is on a premium plan with a signed agreement before it reasons about SLAs.
-
-### ChromaDB / vector retrieval & local embeddings
-
-Policy PDFs, SOPs, product docs, and customer agreements are chunked into
-`storage/chroma`. Each chunk carries `filename`, `document_type`, `status`,
-`account_id`, and `precedence` (see `app/config/document_metadata.py`).
-
-> **Note on Embeddings**: Document embeddings remain strictly local (using `all-MiniLM-L6-v2` via ChromaDB). Embeddings are **not** generated by Anthropic. Claude is used exclusively for final answer generation via the Messages API.
-
-`retriever.py` then:
-
-1. runs a semantic query for the **current** message,
-2. drops anything whose `status` is not `current` — deprecated policies never
-   reach the model,
-3. drops documents belonging to another account (only the account's own
-   documents plus `GLOBAL` ones survive),
-4. force-includes the account's signed agreement even if the semantic query
-   missed it, and
-5. sorts by precedence, then by distance.
-
-### Source precedence
-
-| Rank | Source |
-|---|---|
-| 1 | Customer-specific signed agreement |
-| 2 | Current company policy or SOP |
-| 3 | Current product documentation |
-| 4 | Historical information or notes |
-
-Deprecated documents are never used. When sources conflict, the higher-precedence
-one wins and the answer says which one it followed. Conversation history is
-context only — it never overrides operational data or a higher-precedence
-document.
-
-### Multi-turn session memory
-
-A session is created on the first message and returned as `session_id`. It stores:
-
-- `session_id`, `entity_type`, `entity_id`
-- the transcript as `{role, content}` messages
-- `created_at` / `updated_at`
-
-Properties that matter:
-
-- **Scoped.** A session is bound to one record. Reusing a `TKT-501` session for
-  `TKT-502` or `ORD-1001` is rejected with **409**, so history cannot leak
-  between records.
-- **Bounded.** The prompt replays at most `MAX_HISTORY_MESSAGES` (20) turns; a
-  session stores at most 200, and the store evicts the least-recently-used
-  session past 500.
-- **Retrieval every turn.** Documents are retrieved for each new message, so
-  "what does the agreement say about this?" pulls fresh chunks rather than
-  reusing the first turn's context.
-- **Written only on success.** An unknown id or a failed generation leaves no
-  empty session behind.
-- **Swappable.** `chat_service` depends on the `SessionStore` interface;
-  implement its four methods and call `set_session_store()` to move to Redis or
-  a database.
+| Frontend | React 18, TypeScript, Vite |
+| Backend | Python, FastAPI, Uvicorn |
+| AI / LLM | Claude 3.5 Sonnet via Agent Router (OpenAI-compatible client) |
+| Retrieval | ChromaDB, Retrieval-Augmented Generation |
+| Operational data | SQLite |
+| Access control | Mocked role-based access control (demo) |
+| Frontend deployment | Vercel |
+| Backend deployment | Render |
 
 ---
 
-## Setup
+## Features
 
-```bash
-# 1. Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+### Multi-Turn Conversations
 
-# 2. Install dependencies
-pip install -r requirements.txt
+The `POST /api/chat` endpoint maintains session state across turns. A support agent can ask a follow-up question like *"Should this be escalated?"* and the model resolves it against the same ticket context and conversation history from the preceding turns. Retrieval runs on every turn against the current message, not just the first.
 
-# 3. Configure environment
-#    Create .env at the project root (see Environment variables below)
+### Retrieval-Augmented Generation
 
-# 4. Build the data stores (only needed once)
-python -m scripts.ingest_excel        # SQLite: accounts, orders, tickets
-python -m scripts.ingest_documents    # ChromaDB: policy/SOP/agreement chunks
+Before any LLM call, ChromaDB retrieves the most relevant chunks from the company knowledge base. Source precedence is enforced in the prompt:
+
+1. Customer-signed agreements
+2. Current company policy / SOPs
+3. Product documentation
+4. Historical notes
+
+Lower-priority historical information cannot override a signed agreement or active policy.
+
+### Role-Based, Account-Scoped Authorization
+
+Three demo roles are configured:
+
+| Role | Account Scope |
+|---|---|
+| `support_agent` | Specific accounts only (e.g., `ACCT-001`, `ACCT-003`) |
+| `manager` | All accounts |
+| `admin` | All accounts |
+
+The caller is identified by the `X-User-ID` request header. The record's owning account is resolved from the database — not from the request — and checked against the user's allowed accounts. An unrecognised user ID returns HTTP 401; a record outside the caller's scope returns HTTP 403. Both happen before any protected context is loaded.
+
+### Escalation Workflow
+
+Escalation requests follow a prepare-then-confirm pattern. The AI investigates the ticket, applies the relevant policy, and asks for explicit confirmation before the escalation record is created. Confirmation can only happen within the same session that prepared the action.
+
+### Automatic Database Initialization
+
+On startup, the backend checks whether the `tickets` table exists in the SQLite database. If not — as happens on a fresh Render deployment — it runs the seed script automatically. Records like `TKT-501`, `TKT-502`, and `ORD-1001` are available immediately without any manual step.
+
+---
+
+## API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Returns service status, provider, and active model name. |
+| `GET` | `/` | Confirms the API is reachable. |
+| `POST` | `/api/chat` | Multi-turn conversational endpoint. Accepts entity type, entity ID, message, and optional session ID. Enforces authorization before any data is loaded. |
+| `POST` | `/api/tickets/{ticket_id}/answer` | Single-turn question about a ticket. No session state retained. |
+| `POST` | `/api/orders/{order_id}/answer` | Single-turn question about an order. No session state retained. |
+
+**Health response example:**
+
+```json
+{
+  "status": "ok",
+  "service": "ParcelPilot AI Support Copilot",
+  "provider": "Agent Router",
+  "model": "claude-3-5-sonnet-20241022"
+}
 ```
 
-### Run the backend
+**Chat request example:**
+
+```json
+{
+  "entity_type": "ticket",
+  "entity_id": "TKT-501",
+  "message": "What severity applies and what is the SLA response target?",
+  "session_id": "6cc12c5a..."
+}
+```
+
+---
+
+## Live Demo
+
+| Surface | URL |
+|---|---|
+| **Frontend** | [parcelpilot-ai-agent-psi.vercel.app](https://parcelpilot-ai-agent-psi.vercel.app/) |
+| **Backend API** | `[INSERT_RENDER_BACKEND_URL]` |
+| **Health endpoint** | `[INSERT_RENDER_BACKEND_URL]/health` |
+
+> The demo includes seeded records. Use the one-click example queries in the UI to see the system working immediately without any configuration.
+
+---
+
+## Local Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- npm
+
+### Backend
+
+```bash
+git clone <repository-url>
+cd parcelpilot-ai
+
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+Create a `.env` file at the project root:
+
+```ini
+# Required
+AGENT_ROUTER_API_KEY=your_agent_router_api_key_here
+AGENT_ROUTER_BASE_URL=https://agentrouter.org/v1
+
+# Optional — defaults to claude-3-5-sonnet-20241022 if not set
+CLAUDE_MODEL=claude-3-5-sonnet-20241022
+
+# Optional — required when the frontend calls the backend directly (not via Vite proxy)
+CORS_ALLOW_ORIGINS=http://localhost:5173
+```
+
+Start the backend:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-API at `http://127.0.0.1:8000`, interactive docs at `http://127.0.0.1:8000/docs`.
+The database is initialized automatically on first startup. No manual seed step is required.
 
-### Run the frontend
+### Frontend
 
 ```bash
 cd frontend
@@ -181,180 +251,110 @@ npm install
 npm run dev
 ```
 
-UI at `http://localhost:5173`. The Vite dev server proxies `/api` and `/health`
-to the backend, so requests are same-origin and need no CORS preflight.
+**Frontend environment variables** (for production builds):
 
-```bash
-npm run build            # typecheck + production build
-npm run test:markdown    # markdown parser unit tests
+```ini
+# Base URL of the FastAPI backend, used when calling the API directly from the browser
+VITE_API_BASE_URL=https://your-backend.onrender.com
+
+# Set to true to bypass the Vite proxy and call the backend URL above directly
+VITE_API_DIRECT=true
 ```
+
+In local development, the Vite dev server proxies `/api` and `/health` to the backend — `VITE_API_DIRECT` is not needed. In a deployed frontend (e.g., Vercel), set `VITE_API_DIRECT=true` and configure `CORS_ALLOW_ORIGINS` on the backend to include the deployed frontend origin.
 
 ---
 
-## Environment variables
+## Security and Access Control
 
-### Backend — `.env` at the project root (never committed)
+> **Note:** Authentication and user identities are mocked for demonstration purposes. `X-User-ID` is not a production authentication mechanism.
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | yes | — | Anthropic API key |
-| `CLAUDE_MODEL` | no | `claude-3-5-sonnet-20241022` | Model used for every answer |
-| `CORS_ALLOW_ORIGINS` | no | localhost/127.0.0.1 on ports 5173 and 4173 | Comma-separated allowlist of browser origins |
+Authorization logic is enforced entirely on the server:
 
-### Frontend — `frontend/.env`
+- The **frontend never decides** which accounts a user may access.
+- The `X-User-ID` header is used only to look up the caller in the server-side demo directory.
+- The **record's owning account** is resolved from the database, not from anything the client sends.
+- The user's allowed account set is checked before any of the following occur:
+  - Loading protected record context
+  - Vector retrieval from ChromaDB
+  - Any LLM call
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `VITE_API_BASE_URL` | `http://127.0.0.1:8000` | Backend location (also the Vite proxy target) |
-| `VITE_API_DIRECT` | `false` | `true` bypasses the proxy and calls the backend directly, which requires the origin to be in `CORS_ALLOW_ORIGINS` |
-
-`.env` files are gitignored. Keys are read from the environment only — nothing is
-hardcoded.
+An agent who modifies a ticket ID in the browser to a record outside their scope receives HTTP 403. No record data, retrieved chunks, or model tokens are consumed.
 
 ---
 
-## API endpoints
+## Project Structure
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | Service health check |
-| GET | `/` | Basic service information |
-| POST | `/api/chat` | **Multi-turn conversation** about a ticket or order |
-| POST | `/api/tickets/{ticket_id}/answer` | Single-turn ticket question |
-| POST | `/api/orders/{order_id}/answer` | Single-turn order question |
-
-Both single-turn endpoints are unchanged and remain fully supported.
-
-### `POST /api/chat`
-
-Request:
-
-```json
-{
-  "session_id": "optional-session-id",
-  "entity_type": "ticket",
-  "entity_id": "TKT-501",
-  "message": "What is the severity?"
-}
 ```
-
-Response:
-
-```json
-{
-  "session_id": "ad675aa83dbb47bb9ef774a6328c7b9c",
-  "entity_type": "ticket",
-  "entity_id": "TKT-501",
-  "answer": "This is a **P1 - Critical** incident…"
-}
+parcelpilot-ai/
+├── app/
+│   ├── agent/          # RAG pipeline, prompt assembly, LLM calls
+│   ├── config/         # Demo user directory (roles, account scopes)
+│   ├── database/       # SQLite connection factory
+│   ├── models/         # Pydantic request/response models
+│   ├── services/       # Access control, chat orchestration, session store
+│   ├── errors.py       # Domain exception types
+│   └── main.py         # FastAPI app, startup hook, error handlers, routes
+│
+├── scripts/
+│   └── ingest_excel.py # Seeds accounts, orders, and tickets from the source spreadsheet
+│
+├── storage/
+│   └── sqlite/         # SQLite database (auto-created on startup if absent)
+│
+├── tests/              # pytest test suite
+│
+├── frontend/           # React + TypeScript + Vite application
+│
+└── docs/
+    └── images/         # Screenshots used in this README
 ```
-
-Omit `session_id` to start a conversation, then send the returned id with every
-follow-up.
-
-### Status codes
-
-| Code | Meaning |
-|---|---|
-| 200 | Answer produced |
-| 404 | Ticket or order id does not exist — e.g. `{"detail": "Ticket TKT-999 not found"}` |
-| 409 | The `session_id` belongs to a different record |
-| 422 | Malformed body (blank message, unknown `entity_type`, …) |
-| 429 | Anthropic rate limit reached; includes a `Retry-After` header |
-| 500 | Genuine server error — logged with a traceback |
-
-Only these specific conditions are translated. Unexpected failures stay 500
-rather than being reshaped into client errors.
-
----
-
-## Example conversation
-
-```bash
-# Turn 1 — start a conversation
-curl -X POST http://127.0.0.1:8000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"entity_type":"ticket","entity_id":"TKT-501",
-       "message":"All shipment creation is failing. What is the severity?"}'
-```
-
-> This is a **P1 - Critical** incident. `01_Support_Policy_v3_CURRENT.pdf` defines
-> P1 as a complete production outage preventing all shipment creation for a
-> customer, which matches this ticket. Northstar Logistics has premium support,
-> so the first-response target is 15 minutes, 24x7.
-
-```bash
-# Turn 2 — follow-up, same session
-curl -X POST http://127.0.0.1:8000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"<id from turn 1>","entity_type":"ticket","entity_id":"TKT-501",
-       "message":"Why is it that severity?"}'
-```
-
-> It is P1 - Critical because every user at Northstar receives HTTP 500 when
-> creating any shipment, which is a complete production outage under
-> `01_Support_Policy_v3_CURRENT.pdf` …
-
-```bash
-# Turn 3 — the copilot still has the thread
-curl -X POST http://127.0.0.1:8000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"<same id>","entity_type":"ticket","entity_id":"TKT-501",
-       "message":"What should I tell the customer?"}'
-```
-
-> Tell the customer the issue is being handled as a P1 incident, that engineering
-> is engaged, and that they will receive an update within the 15-minute
-> first-response window …
-
-Note that turns 2 and 3 contain no ticket id and no mention of severity — the
-copilot resolves "that severity" and "the customer" from the conversation.
 
 ---
 
 ## Testing
 
 ```bash
-# Session & HTTP stub tests — deterministic, no API key or quota needed
-python -m scripts.test_chat_http_stub
-python -m scripts.test_chat_session
-
-# Full API suite against a running server (makes real Anthropic calls)
-python -m scripts.test_chat_api
-
-# Only the checks that consume no model rate limit
-python -m scripts.test_chat_api --no-model
-
-# Markdown parser
-cd frontend && npm run test:markdown
+pytest -q
 ```
 
-`scripts/` also holds the original harnesses for retrieval, the repository layer,
-and the context service.
+Access-control behavior is explicitly tested. A representative scenario:
+
+> A `support_agent` user with scope `ACCT-001, ACCT-003` requests data for a ticket belonging to `ACCT-004`. The backend returns HTTP 403. No record is loaded, no retrieval occurs, and no model call is made.
 
 ---
 
-## Notes and limitations
+## Design Goals
 
-**In-memory sessions.** Conversations live in the FastAPI process:
+This project was built to demonstrate engineering practices relevant to AI-integrated backend systems:
 
-- they are lost on restart,
-- they are not shared between workers, so `--workers 2` would route follow-ups to
-  a process that has never seen the conversation,
-- they are capped at 500 sessions with least-recently-used eviction,
-- there is no TTL, so a session survives until evicted, and
-- there is no per-session lock, so two simultaneous turns on the same brand-new
-  session can race (the second one wins).
+| Area | Implementation |
+|---|---|
+| Production-style FastAPI architecture | Layered services, domain exceptions, narrow error mapping |
+| RAG pipeline | ChromaDB retrieval, source precedence, per-turn retrieval |
+| Multi-turn conversations | Session store, history windowing, follow-up resolution |
+| Backend authorization | Pre-retrieval access control, server-side account resolution |
+| LLM integration | Agent Router, OpenAI-compatible client, retry logic |
+| Database initialization | Automatic seed on first startup for fresh deployments |
+| Frontend-backend integration | Vite proxy (dev) + configurable direct API URL (prod) |
+| Deployment | Vercel (frontend), Render (backend) |
 
-`SessionStore` exists precisely so this can be replaced by Redis or a database
-table without touching the chat logic.
+---
 
-**Anthropic rate limits.** When rate limits are reached, `/api/chat` returns 429
-with a `Retry-After` header rather than a 500, and the UI explains it. Set
-`CLAUDE_MODEL` to a model with more headroom if needed.
+## Future Improvements
 
-**Markdown rendering.** `Markdown.tsx` renders React elements only — no
-`dangerouslySetInnerHTML`. Emphasis follows CommonMark's flanking rules, so
-underscores inside filenames, IDs, and `snake_case` words are preserved
-(`01_Support_Policy_v3_CURRENT.pdf` renders verbatim) while `_italic_` still
-works. See `frontend/scripts/test-markdown.ts`.
+The following are areas for genuine improvement — none of these are implemented yet:
+
+- **Real authentication** — replace the `X-User-ID` mock with an identity provider (OAuth2, JWT).
+- **Persistent session storage** — move conversation sessions from in-memory to Redis or a database so sessions survive restarts.
+- **Streaming responses** — stream LLM tokens to the frontend for a faster perceived response time.
+- **Persistent vector store** — host ChromaDB on a managed service rather than the local filesystem so embeddings survive Render redeploys.
+- **Production database** — PostgreSQL with a proper migration tool for operational data.
+- **Observability** — structured logging, distributed tracing, and latency instrumentation across the RAG pipeline.
+- **Background jobs** — asynchronous document ingestion and re-indexing without blocking the API.
+
+---
+
+## License
+
+MIT
