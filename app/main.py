@@ -40,6 +40,29 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# ---------------------------------------------------------------------- Database auto-initialization
+from app.database.connection import get_connection
+import scripts.ingest_excel as ingest_excel
+
+@app.on_event("startup")
+def _init_db() -> None:
+    """Create and seed the SQLite DB if it does not yet contain the required tables.
+
+    Render deployments start with an empty file system – the `parcelpilot.db` file
+    does not exist. The existing local workflow populates the DB via
+    `scripts/ingest_excel.py`. To guarantee the same data is available in a fresh
+    environment we check for the presence of a core table (`tickets`) and run the
+    ingestion script when it is missing.
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tickets'")
+        if not cur.fetchone():
+            ingest_excel.ingest_data(conn)
+    finally:
+        conn.close()
+
 
 # ---------------------------------------------------------------------- CORS
 
