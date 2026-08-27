@@ -40,8 +40,10 @@ logger = logging.getLogger(__name__)
 #: Overridable so the model and endpoint can be changed without touching code.
 #: The default must be a model Agent Router actually serves — see GET /v1/models.
 MODEL_NAME = os.getenv("CLAUDE_MODEL") or "claude-opus-5"
-AGENT_ROUTER_BASE_URL = os.getenv("AGENT_ROUTER_BASE_URL") or "https://agentrouter.org/v1"
-
+AGENT_ROUTER_BASE_URL = (
+    os.getenv("AGENT_ROUTER_BASE_URL")
+    or "https://co.agentrouter.org/v1"
+)
 #: Agent Router inspects the User-Agent and rejects unrecognised clients with a
 #: 401 ``unauthorized_client_error`` *before* it ever validates the API key — the
 #: openai SDK's own "OpenAI/Python x.y.z" is one of the clients it refuses. Sending
