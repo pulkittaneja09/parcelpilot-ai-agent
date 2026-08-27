@@ -1,4 +1,4 @@
-﻿# ParcelPilot AI Support Copilot
+# ParcelPilot AI Support Copilot
 
 > A production-style AI support operations system — multi-turn conversations, RAG-grounded answers, and backend-enforced access control, deployed on Vercel and Render.
 
@@ -8,6 +8,10 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-RAG-orange)](https://www.trychroma.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?logo=vercel&logoColor=white)](https://parcelpilot-ai-agent-psi.vercel.app/)
+[![Backend API](https://img.shields.io/badge/Backend%20API-Render-46E3B7?logo=render&logoColor=white)](https://parcelpilot-ai-agent-59d5.onrender.com/)
+[![API Health](https://img.shields.io/badge/API%20Health-Check-brightgreen)](https://parcelpilot-ai-agent-59d5.onrender.com/health)
 
 ---
 
@@ -186,11 +190,15 @@ On startup, the backend checks whether the `tickets` table exists in the SQLite 
 
 ## Live Demo
 
-| Surface | URL |
+| Service | Live URL |
 |---|---|
-| **Frontend** | [parcelpilot-ai-agent-psi.vercel.app](https://parcelpilot-ai-agent-psi.vercel.app/) |
-| **Backend API** | `[INSERT_RENDER_BACKEND_URL]` |
-| **Health endpoint** | `[INSERT_RENDER_BACKEND_URL]/health` |
+| **Frontend Application** | [Open ParcelPilot AI Support Copilot](https://parcelpilot-ai-agent-psi.vercel.app/) |
+| **FastAPI Backend** | [Open Backend API](https://parcelpilot-ai-agent-59d5.onrender.com/) |
+| **API Health Check** | [Check API Health](https://parcelpilot-ai-agent-59d5.onrender.com/health) |
+
+- **Frontend** — React + TypeScript + Vite application deployed on Vercel.
+- **Backend API** — FastAPI service deployed on Render.
+- **Health Check** — Returns the current backend status, service information, provider, and configured model.
 
 > The demo includes seeded records. Use the one-click example queries in the UI to see the system working immediately without any configuration.
 
