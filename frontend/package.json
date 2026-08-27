@@ -1,0 +1,29 @@
+{
+  "name": "parcelpilot-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ParcelPilot AI Support Copilot — operations dashboard frontend",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "test:markdown": "esbuild scripts/test-markdown.ts --bundle --platform=node --format=cjs --outfile=node_modules/.tmp/test-markdown.cjs --log-level=warning && node node_modules/.tmp/test-markdown.cjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.510.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "tailwindcss": "^4.1.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  }
+}
