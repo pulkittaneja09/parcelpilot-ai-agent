@@ -13,18 +13,21 @@ else — a retrieval failure, a bug — surfaces as a 500 so it stays visible.
 
 import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.agent.support_agent import MODEL_NAME, answer_order, answer_ticket
 from app.errors import (
+    AccountAccessDeniedError,
     EntityNotFoundError,
     ModelRateLimitError,
     SessionEntityMismatchError,
+    UnknownUserError,
 )
 from app.models.chat import ChatRequest, ChatResponse
+from app.services.access_control import authenticate
 from app.services.chat_service import send_message
 
 
@@ -86,6 +89,31 @@ def handle_entity_not_found(
     """An unknown ticket or order id is a 404, not a server error."""
 
     return JSONResponse(status_code=404, content={"detail": str(error)})
+
+
+@app.exception_handler(UnknownUserError)
+def handle_unknown_user(
+    request: Request,
+    error: UnknownUserError,
+) -> JSONResponse:
+    """401: the caller could not be identified at all."""
+
+    return JSONResponse(status_code=401, content={"detail": str(error)})
+
+
+@app.exception_handler(AccountAccessDeniedError)
+def handle_account_access_denied(
+    request: Request,
+    error: AccountAccessDeniedError,
+) -> JSONResponse:
+    """403: the caller's role and account scope do not cover this record.
+
+    Raised before protected context is loaded, before vector retrieval, and
+    before generation — so nothing was read, nothing was retrieved, and no model
+    call was made.
+    """
+
+    return JSONResponse(status_code=403, content={"detail": str(error)})
 
 
 @app.exception_handler(SessionEntityMismatchError)
@@ -157,12 +185,22 @@ def health() -> dict[str, str]:
 def answer_ticket_question(
     ticket_id: str,
     request: QuestionRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-ID"),
 ):
-    """Answer one question about a ticket, without conversation memory."""
+    """Answer one question about a ticket, without conversation memory.
+
+    ``X-User-ID`` identifies the caller; their role and account scope are resolved
+    server-side and checked against the ticket's owning account before any
+    protected row reaches the model.
+    """
 
     return {
         "id": ticket_id,
-        "answer": answer_ticket(ticket_id=ticket_id, query=request.query),
+        "answer": answer_ticket(
+            ticket_id=ticket_id,
+            query=request.query,
+            user=authenticate(x_user_id),
+        ),
     }
 
 
@@ -170,22 +208,39 @@ def answer_ticket_question(
 def answer_order_question(
     order_id: str,
     request: QuestionRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-ID"),
 ):
-    """Answer one question about an order, without conversation memory."""
+    """Answer one question about an order, without conversation memory.
+
+    ``X-User-ID`` identifies the caller; their role and account scope are resolved
+    server-side and checked against the order's owning account before any
+    protected row reaches the model.
+    """
 
     return {
         "id": order_id,
-        "answer": answer_order(order_id=order_id, query=request.query),
+        "answer": answer_order(
+            order_id=order_id,
+            query=request.query,
+            user=authenticate(x_user_id),
+        ),
     }
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-ID"),
+) -> ChatResponse:
     """Answer one turn of a conversation about a ticket or order.
 
     Omit ``session_id`` to start a conversation; send the one that comes back
     with every follow-up so the copilot can resolve references like "why is it
     that severity?" or "what should I tell the customer?".
+
+    ``X-User-ID`` identifies the caller; their role and account scope are resolved
+    server-side. State-changing actions are prepared on request and executed only
+    after an explicit confirmation in the same session.
     """
 
-    return send_message(request)
+    return send_message(request, user_id=x_user_id)
