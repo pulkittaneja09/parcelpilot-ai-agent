@@ -86,6 +86,34 @@ function UserTurn({ content }: { content: string }) {
   );
 }
 
+/**
+ * Tools the backend reported for this turn.
+ *
+ * Rendered from the response's `tools_used`, which the backend populates at the
+ * real call sites — so this is actual tool activity, not a narrated guess.
+ */
+function ToolActivity({ tools }: { tools: NonNullable<ChatTurn["tools"]> }) {
+  if (tools.length === 0) return null;
+
+  return (
+    <ul className="mb-2.5 flex flex-wrap gap-1.5">
+      {tools.map((tool, index) => (
+        <li
+          key={`${tool.name}-${index}`}
+          title={tool.detail}
+          className="inline-flex items-center gap-1.5 rounded-md border border-edge bg-base-800/70 px-2 py-1 text-[11px] text-fg-muted"
+        >
+          <span aria-hidden="true">{tool.icon}</span>
+          <span className="font-medium">{tool.label}</span>
+          <span className="hidden max-w-[18rem] truncate text-fg-faint sm:inline">
+            {tool.detail}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function AssistantTurn({ turn }: { turn: ChatTurn }) {
   const [copied, setCopied] = useState(false);
 
@@ -107,6 +135,8 @@ function AssistantTurn({ turn }: { turn: ChatTurn }) {
       </span>
 
       <div className="min-w-0 flex-1 rounded-2xl rounded-tl-md border border-edge bg-base-900/50 px-4 py-3">
+        {turn.tools && <ToolActivity tools={turn.tools} />}
+
         <Markdown content={turn.content} className="text-[14.5px]" />
 
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-edge/70 pt-2.5">
@@ -180,6 +210,14 @@ function ThinkingTurn() {
 function hintForStatus(status?: number): string | null {
   if (status === 404) {
     return "That ID was not found in the operational database. Check the format (TKT-501, ORD-1001) and that the record type matches.";
+  }
+
+  if (status === 401) {
+    return "The X-User-ID header names a user that does not exist. Pick one of the demo users.";
+  }
+
+  if (status === 403) {
+    return "The current demo user's role and account scope do not cover this record. Access control is enforced in the backend — no context was loaded, nothing was retrieved, and no model call was made. Switch to Manager 1 or Admin 1 to see it.";
   }
 
   if (status === 409) {
