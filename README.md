@@ -1,5 +1,14 @@
 # ParcelPilot AI Support Copilot
 
+## 🚀 Live Demo
+
+| Service | Link |
+|---------|------|
+| 🌐 Frontend / Live Application | [https://parcelpilot-ai-agent-psi.vercel.app/](https://parcelpilot-ai-agent-psi.vercel.app/) |
+| ⚙️ Backend API | [https://parcelpilot-ai-agent-59d5.onrender.com/](https://parcelpilot-ai-agent-59d5.onrender.com/) |
+| ❤️ API Health Check | [https://parcelpilot-ai-agent-59d5.onrender.com/health](https://parcelpilot-ai-agent-59d5.onrender.com/health) |
+| 📚 API Documentation | [https://parcelpilot-ai-agent-59d5.onrender.com/docs](https://parcelpilot-ai-agent-59d5.onrender.com/docs) |
+
 > A production-style AI support operations system — multi-turn conversations, RAG-grounded answers, and backend-enforced access control, deployed on Vercel and Render.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
